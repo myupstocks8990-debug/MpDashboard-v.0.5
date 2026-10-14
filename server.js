@@ -55,6 +55,15 @@ function sanitizeRequestTarget(target) {
         return requestTarget.split(/[?#]/, 1)[0];
     }
 }
+
+function decodeRequestPathname(value) {
+    const candidate = String(value || '');
+    try {
+        return decodeURIComponent(candidate).replace(/\\/g, '/');
+    } catch (error) {
+        return candidate.replace(/\\/g, '/');
+    }
+}
 const configuredClientOrigins = (process.env.CORS_ORIGIN || '').split(/[;,\n]/).map(normalizeOrigin).filter(Boolean);
 const localClientOrigins = NODE_ENV === 'production' ? [] : [`http://localhost:${PORT}`, `http://127.0.0.1:${PORT}`];
 const CLIENT_ORIGINS = new Set([...configuredClientOrigins, ...localClientOrigins]);
@@ -3636,8 +3645,9 @@ async function handleApi(request, response, url) {
 function serveStatic(request, response, url) {
     let requested = url.pathname === '/' ? '/index.html' : url.pathname;
     if (url.pathname === '/staff.html' && url.searchParams.get('module') === 'settings') requested = '/settings.html';
-    if (requested.includes('..') || requested.includes('\\') || requested.includes('\0')) return json(response, 403, { error: 'Forbidden.' });
-    const normalizedRequest = path.posix.normalize(requested);
+    const decodedRequest = decodeRequestPathname(requested);
+    if (decodedRequest.includes('..') || decodedRequest.includes('\\') || decodedRequest.includes('\0')) return json(response, 403, { error: 'Forbidden.' });
+    const normalizedRequest = path.posix.normalize(decodedRequest);
     const isAllowedPublicPath = PUBLIC_STATIC_PATHS.has(normalizedRequest) || PUBLIC_STATIC_PREFIXES.some((prefix) => normalizedRequest.startsWith(prefix));
     if (!isAllowedPublicPath || normalizedRequest.startsWith('/.') || normalizedRequest.startsWith('/crm-files') || normalizedRequest.startsWith('/database') || normalizedRequest.includes('/.git') || normalizedRequest.includes('/.env')) {
         return json(response, 403, { error: 'Forbidden.' });

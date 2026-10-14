@@ -235,6 +235,72 @@ test('login, authenticated API requests, logout, and session invalidation use th
   assert.doesNotMatch(logs, /synthetic-bearer-marker/);
 });
 
+test('public static files remain available while protected files stay blocked after decoding and normalization', async () => {
+  const staticFixtures = [
+    { route: '/css/test-fixture.css', filePath: path.join(__dirname, 'css', 'test-fixture.css'), content: 'body { color: #111827; }\n' },
+    { route: '/js/test-fixture.js', filePath: path.join(__dirname, 'js', 'test-fixture.js'), content: 'window.__fixture = true;\n' },
+    { route: '/images/test-fixture.svg', filePath: path.join(__dirname, 'images', 'test-fixture.svg'), content: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10" fill="#111827" /></svg>\n' }
+  ];
+
+  for (const fixture of staticFixtures) {
+    fs.mkdirSync(path.dirname(fixture.filePath), { recursive: true });
+    fs.writeFileSync(fixture.filePath, fixture.content, 'utf8');
+  }
+  try {
+    const allowed = ['/login.html', '/crm-api.js', '/settings-ui.js', '/robots.txt', '/css/test-fixture.css', '/js/test-fixture.js', '/images/test-fixture.svg'];
+    for (const route of allowed) {
+      const response = await fetch(`${baseUrl}${route}`);
+      assert.equal(response.status, 200, `${route} should remain publicly accessible`);
+      const body = await response.text();
+      assert.ok(body.length > 0, `${route} should serve content`);
+    }
+
+    const blocked = ['/\.env', '/database/schema.sql', '/mysql/schema.sql', '/supabase/schema.sql', '/crm-files/private-note.txt', '/../server.js', '/..%2Fserver.js', '/%2e%2e%2fserver.js', '/%2e%2e%5cserver.js', '/..%5Cserver.js', '/%252e%252e%252fserver.js', '/%2e%2e%252fserver.js', '/%2e%2e%2f%2e%2e%2fserver.js'];
+    for (const route of blocked) {
+      const response = await fetch(`${baseUrl}${route}`);
+      assert.notEqual(response.status, 200, `${route} should not be served`);
+      const body = await response.text();
+      assert.doesNotMatch(body, /<html|<svg|window\.__fixture|MP Dashboard|INPACE/i);
+    }
+  } finally {
+    for (const fixture of staticFixtures) {
+      try { fs.unlinkSync(fixture.filePath); } catch (error) { }
+    }
+    for (const fixture of staticFixtures) {
+      const parentDir = path.dirname(fixture.filePath);
+      try {
+        if (fs.existsSync(parentDir) && fs.readdirSync(parentDir).length === 0) fs.rmdirSync(parentDir);
+      } catch (error) { }
+    }
+  }
+});
+
+test('malformed percent encoding, backslashes and NUL-byte payloads are rejected safely', async () => {
+  const attackVectors = [
+    '/%zz',
+    '/%2',
+    '/%E0%A4%A',
+    '/%00/.env',
+    '/%00database/schema.sql',
+    '/..%5c..%5cserver.js',
+    '/.%5c.%5cserver.js',
+    '/%2e%2e%2f%2e%2e%2fserver.js',
+    '/%2e%2e%2f%2e%2e%2fdatabase/schema.sql',
+    '/%2e%2e%2f%2e%2e%2f.env',
+    '/%252e%252e%252fserver.js',
+    '/%252e%252e%252fdatabase/schema.sql'
+  ];
+
+  for (const route of attackVectors) {
+    const response = await fetch(`${baseUrl}${route}`).catch(() => null);
+    assert.ok(response === null || response.status !== 200, `${route} should not return a protected file`);
+    if (response) {
+      const body = await response.text();
+      assert.doesNotMatch(body, /server\.js|database\/schema\.sql|\.env|MP Dashboard|INPACE/i);
+    }
+  }
+});
+
 test('request logs redact OAuth and other sensitive query values', async () => {
   const markers = [
     'synthetic-oauth-code-marker',
